@@ -803,6 +803,14 @@ CREATE OR REPLACE FUNCTION "scripts"."tr_metadata_pre_update"() RETURNS "trigger
       USING ERRCODE = 'check_violation';
   END IF;
 
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND auth.uid() IS NOT NULL
+     AND NOT profiles.is_role(auth.uid(), 'administrator'::profiles.roles) THEN
+    RAISE EXCEPTION
+      'Only administrators can change a script status'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   RETURN NEW;
 END;$$;
 
@@ -2741,9 +2749,25 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"
 
 
 
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."scripts" TO "anon";
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."scripts" TO "authenticated";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "scripts"."scripts" TO "anon";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "scripts"."scripts" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."scripts" TO "service_role";
+
+
+
+GRANT UPDATE("title") ON TABLE "scripts"."scripts" TO "authenticated";
+
+
+
+GRANT UPDATE("description") ON TABLE "scripts"."scripts" TO "authenticated";
+
+
+
+GRANT UPDATE("content") ON TABLE "scripts"."scripts" TO "authenticated";
+
+
+
+GRANT UPDATE("published") ON TABLE "scripts"."scripts" TO "authenticated";
 
 
 
