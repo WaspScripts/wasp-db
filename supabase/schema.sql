@@ -365,25 +365,6 @@ $$;
 ALTER FUNCTION "profiles"."get_discord_id"("userid" "uuid") OWNER TO "supabase_admin";
 
 
-CREATE OR REPLACE FUNCTION "profiles"."get_email"("user_id" "uuid") RETURNS "text"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-    user_email text;
-BEGIN
-    SELECT email INTO user_email
-    FROM auth.users
-    WHERE id = user_id;
-
-    RETURN user_email;
-END;
-$$;
-
-
-ALTER FUNCTION "profiles"."get_email"("user_id" "uuid") OWNER TO "supabase_admin";
-
-
 CREATE OR REPLACE FUNCTION "profiles"."get_roles_enum"() RETURNS "text"[]
     LANGUAGE "sql" STABLE
     SET "search_path" TO ''
@@ -645,7 +626,7 @@ BEGIN
 
     -- Build dynamic URL
     url := format(
-        'https://waspscripts.dev/api/supabase/%s/%s',
+        'https://waspscripts.com/api/supabase/%s/%s',
         tg_table_schema,
         tg_table_name
     );
@@ -917,23 +898,25 @@ ALTER FUNCTION "scripts"."tr_scripts_pre_insert"() OWNER TO "supabase_admin";
 
 
 CREATE OR REPLACE FUNCTION "scripts"."tr_simba_post_upsert"() RETURNS "trigger"
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-begin
-  perform net.http_post(
-    url := 'https://db.waspscripts.dev/functions/v1/simba',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json'
-    ),
-    body := jsonb_build_object(
-      'path', NEW.url,
-      'version', NEW.version
-    )
-  );
+DECLARE
+    secret text;
+BEGIN
+    SELECT decrypted_secret INTO secret FROM vault.decrypted_secrets WHERE name = 'SIMBA_FUNCTION_SECRET' LIMIT 1;
 
-  return NEW;
-end;
+    PERFORM net.http_post(
+        url := 'https://db.waspscripts.com/functions/v1/simba',
+        headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'x-simba-secret', secret
+        ),
+        body := jsonb_build_object('version', NEW.version)
+    );
+
+    RETURN NEW;
+END;
 $$;
 
 
@@ -2158,6 +2141,10 @@ CREATE POLICY "SELECT for OWNER" ON "profiles"."subscriptions" FOR SELECT TO "au
 
 
 
+CREATE POLICY "UPDATE for OWNER" ON "profiles"."scripters" FOR UPDATE TO "authenticated" USING ((("id" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))) WITH CHECK ((("id" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+
+
+
 CREATE POLICY "UPDATE for SERVICE_USER" ON "profiles"."balances" FOR UPDATE TO "service_role" USING (true) WITH CHECK (true);
 
 
@@ -2486,12 +2473,6 @@ GRANT ALL ON FUNCTION "profiles"."get_discord_id"("userid" "uuid") TO "service_r
 
 
 
-GRANT ALL ON FUNCTION "profiles"."get_email"("user_id" "uuid") TO "anon";
-GRANT ALL ON FUNCTION "profiles"."get_email"("user_id" "uuid") TO "authenticated";
-GRANT ALL ON FUNCTION "profiles"."get_email"("user_id" "uuid") TO "service_role";
-
-
-
 GRANT ALL ON FUNCTION "profiles"."get_username"("userid" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "profiles"."get_username"("userid" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "profiles"."get_username"("userid" "uuid") TO "service_role";
@@ -2529,15 +2510,14 @@ GRANT ALL ON FUNCTION "public"."generate_hmac"("secret_key" "text", "message" "t
 
 
 
+REVOKE ALL ON FUNCTION "public"."get_simba_hash"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_simba_hash"() TO "postgres";
-GRANT ALL ON FUNCTION "public"."get_simba_hash"() TO "anon";
-GRANT ALL ON FUNCTION "public"."get_simba_hash"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_simba_hash"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."get_wasplib_hash"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_wasplib_hash"() TO "postgres";
-GRANT ALL ON FUNCTION "public"."get_wasplib_hash"() TO "anon";
 GRANT ALL ON FUNCTION "public"."get_wasplib_hash"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_wasplib_hash"() TO "service_role";
 
@@ -2550,9 +2530,9 @@ GRANT ALL ON FUNCTION "public"."webhook"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "scripts"."cron_update_simba_versions"() TO "anon";
-GRANT ALL ON FUNCTION "scripts"."cron_update_simba_versions"() TO "authenticated";
+REVOKE ALL ON FUNCTION "scripts"."cron_update_simba_versions"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "scripts"."cron_update_simba_versions"() TO "service_role";
+GRANT ALL ON FUNCTION "scripts"."cron_update_simba_versions"() TO "postgres";
 
 
 
@@ -2704,9 +2684,29 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "profiles
 
 
 
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "profiles"."scripters" TO "anon";
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "profiles"."scripters" TO "authenticated";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "profiles"."scripters" TO "anon";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "profiles"."scripters" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "profiles"."scripters" TO "service_role";
+
+
+
+GRANT UPDATE("realname") ON TABLE "profiles"."scripters" TO "authenticated";
+
+
+
+GRANT UPDATE("github") ON TABLE "profiles"."scripters" TO "authenticated";
+
+
+
+GRANT UPDATE("paypal") ON TABLE "profiles"."scripters" TO "authenticated";
+
+
+
+GRANT UPDATE("description") ON TABLE "profiles"."scripters" TO "authenticated";
+
+
+
+GRANT UPDATE("content") ON TABLE "profiles"."scripters" TO "authenticated";
 
 
 
