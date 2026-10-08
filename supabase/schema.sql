@@ -2130,7 +2130,7 @@ CREATE POLICY "INSERT for ADMINISTRATOR" ON "profiles"."scripters" FOR INSERT TO
 
 
 
-CREATE POLICY "INSERT for NEW USER" ON "profiles"."profiles" FOR INSERT TO "authenticated" WITH CHECK (("id" = ( SELECT "auth"."uid"() AS "uid")));
+CREATE POLICY "INSERT for NEW USER" ON "profiles"."profiles" FOR INSERT TO "authenticated" WITH CHECK ((("id" = ( SELECT "auth"."uid"() AS "uid")) AND ("role" IS NULL)));
 
 
 
