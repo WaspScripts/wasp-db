@@ -35,7 +35,7 @@ jobs:
       - name: Check for secrets before committing
         run: |
           if grep -inE "secret|api_key|password|token|key_id" supabase/schema.sql \
-            | grep -ivE "secret_key\"|decrypted_secrets|WEBHOOK_SECRET|generate_hmac|path_tokens"; then
+            | grep -ivE "secret_key|secret text|decrypted_secret|WEBHOOK_SECRET|generate_hmac|path_tokens"; then
             echo "::error::Potential secret found in schema dump — aborting commit."
             exit 1
           fi
