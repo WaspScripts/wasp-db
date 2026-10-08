@@ -1,0 +1,4 @@
+.env
+.env.*
+supabase/.temp/
+supabase/.branches/
