@@ -48,16 +48,48 @@ self-hosted instance — they don't belong to this project.
    see Supabase's Wrappers docs linked above. This repo does not include that setup
    since it's credential-specific to each deployment.
 
-## Updating this repo
+## Keeping the schema in sync
 
-To regenerate the schema dump after making changes to the live database:
+`supabase/schema.sql` is the live, always-current snapshot of the schema. It's kept up
+to date automatically by `.github/workflows/schema-sync.yml`, which:
+
+1. Runs every 24 hours (and can be triggered manually from the Actions tab).
+2. Dumps the schema for `public,profiles,scripts,stats,stripe,info` using credentials
+   stored as repo secrets (never committed, never printed in logs).
+3. Runs a grep-based secret scan over the fresh dump as a safety net before committing.
+4. Commits and pushes `supabase/schema.sql` only if it actually changed.
+
+### Required repo secrets
+
+Set these under Settings → Secrets and variables → Actions:
+
+| Secret | Description |
+| --- | --- |
+| `DB_HOST` | IP or hostname of the self-hosted Postgres instance |
+| `DB_PORT` | Port Postgres is listening on |
+| `DB_USER` | Postgres role to connect as (e.g. `postgres`) |
+| `DB_PASSWORD` | Password for that role |
+
+The workflow builds the connection string from these at run time, so none of them ever
+appear in this repo or in workflow logs.
+
+### Manual dump
+
+To regenerate the snapshot locally instead of waiting for the scheduled run:
 
 ```bash
 supabase db dump \
-  --db-url "postgresql://postgres:<password>@<host>:<port>/postgres" \
+  --db-url "postgresql://<user>:<password>@<host>:<port>/postgres" \
   --schema public,profiles,scripts,stats,stripe,info \
-  -f supabase/migrations/$(date +%Y%m%d%H%M%S)_<description>.sql
+  -f supabase/schema.sql
 ```
 
 Always grep new dumps for `secret|api_key|password|token|key_id` before committing,
-to catch anything that shouldn't be published.
+to catch anything that shouldn't be published — the automated workflow does this too,
+but double-check manual runs yourself.
+
+## Migrations
+
+`supabase/migrations/` holds the one-off, manually curated baseline migration used to
+originally seed a fresh instance. It is not updated automatically — `supabase/schema.sql`
+is the source of truth for "what does the schema look like right now."
