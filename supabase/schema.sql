@@ -186,76 +186,35 @@ ALTER FUNCTION "profiles"."can_access"("script_id" "uuid") OWNER TO "supabase_ad
 
 
 CREATE OR REPLACE FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script_id" "uuid") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "sql" STABLE
     SET "search_path" TO ''
-    AS $$DECLARE
-	scripts_array uuid[];
-BEGIN
-	-- author check
-	IF EXISTS ( 
-		SELECT 1 FROM scripts.protected WHERE script_id = id AND author = accesser_id
-	) THEN
-		RETURN true;
-	END IF;
-	
-	-- mod/admin check
-	IF (profiles.min_role(accesser_id, 'moderator'::profiles.roles)) THEN
-		RETURN true;
-	END IF;
-
-	IF (scripts.is_stage(script_id, 'archived'::scripts.stage)) THEN
-		RETURN false;
-	END IF;
-
-	-- tester/scripter and script alpha+ check
-	IF (
-		profiles.min_role(accesser_id, 'tester'::profiles.roles) AND
-		scripts.min_stage(script_id, 'alpha'::scripts.stage)
-	) THEN
-		RETURN true;
-	END IF;
-
-	IF NOT EXISTS (
-		SELECT 1 FROM scripts.metadata WHERE script_id = id AND type = 'premium'::scripts.type
-	) THEN
-		RETURN true;
-	END IF;
-
-	WITH combined_access AS (
-		SELECT p.script, p.bundle
-		FROM profiles.subscriptions s
-		JOIN stripe.products p ON s.product = p.id
-		WHERE s.user_id = accesser_id AND s.date_end > CURRENT_DATE
-
-		UNION ALL
-
-		SELECT p.script, p.bundle
-		FROM profiles.free_access fa
-		JOIN stripe.products p ON fa.product = p.id
-		WHERE fa.user_id = accesser_id AND fa.date_end > CURRENT_DATE
-	)
-	SELECT array_agg(DISTINCT s) INTO scripts_array
-	FROM (
-		-- Scripts directly from combined_access
-		SELECT ca.script AS s
-		FROM combined_access ca
-		WHERE ca.script IS NOT NULL
-
-		UNION
-
-		-- Scripts from bundles
-		SELECT unnest(b.scripts) AS s
-		FROM combined_access ca
-		JOIN scripts.bundles b ON ca.bundle = b.id
-		WHERE b.scripts IS NOT NULL
-	) all_scripts;
-
-	IF scripts_array IS NOT NULL THEN
-		RETURN true;
-	END IF;
-
-	RETURN false;
-END;$$;
+    AS $$
+      WITH granting AS (
+              SELECT p.id
+              FROM stripe.products p
+              WHERE p.script = script_id
+                      OR p.bundle IN (SELECT b.id FROM scripts.bundles b WHERE script_id = ANY(b.scripts))
+      )
+      SELECT
+              EXISTS (SELECT 1 FROM scripts.protected WHERE id = script_id AND author = accesser_id)
+              OR profiles.min_role(accesser_id, 'moderator'::profiles.roles)
+              OR COALESCE((
+                      SELECT m.stage <> 'archived'::scripts.stage AND (
+                              m.type <> 'premium'::scripts.type
+                              OR (m.stage >= 'alpha'::scripts.stage AND profiles.min_role(accesser_id, 'tester'::profiles.roles))
+                              OR EXISTS (
+                                      SELECT 1 FROM profiles.subscriptions s
+                                      WHERE s.user_id = accesser_id AND s.date_end > CURRENT_DATE AND s.product IN (SELECT id FROM granting)
+                              )
+                              OR EXISTS (
+                                      SELECT 1 FROM profiles.free_access fa
+                                      WHERE fa.user_id = accesser_id AND fa.date_end > CURRENT_DATE AND fa.product IN (SELECT id FROM granting)
+                              )
+                      )
+                      FROM scripts.metadata m
+                      WHERE m.id = script_id
+              ), true);
+$$;
 
 
 ALTER FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script_id" "uuid") OWNER TO "supabase_admin";
@@ -787,6 +746,34 @@ CREATE OR REPLACE FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_sta
 
 
 ALTER FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_stage" "scripts"."stage") OWNER TO "supabase_admin";
+
+
+CREATE OR REPLACE FUNCTION "scripts"."tr_bundles_check_scripts"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+      IF auth.uid() IS NULL OR profiles.min_role(auth.uid(), 'moderator'::profiles.roles) THEN
+              RETURN NEW;
+      END IF;
+
+      IF EXISTS (
+              SELECT 1
+              FROM unnest(NEW.scripts) AS s(id)
+              WHERE NOT EXISTS (
+                      SELECT 1 FROM scripts.protected p WHERE p.id = s.id AND p.author = NEW.author
+              )
+      ) THEN
+              RAISE EXCEPTION 'Bundles can only contain scripts authored by the bundle author'
+                      USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "scripts"."tr_bundles_check_scripts"() OWNER TO "supabase_admin";
 
 
 CREATE OR REPLACE FUNCTION "scripts"."tr_bundles_pre_insert"() RETURNS "trigger"
@@ -1887,6 +1874,10 @@ ALTER TABLE "profiles"."scripters" DISABLE TRIGGER "tr_scritpers_pre_insert";
 
 
 
+CREATE OR REPLACE TRIGGER "tr_bundles_check_scripts" BEFORE INSERT OR UPDATE ON "scripts"."bundles" FOR EACH ROW EXECUTE FUNCTION "scripts"."tr_bundles_check_scripts"();
+
+
+
 CREATE OR REPLACE TRIGGER "tr_bundles_pre_insert" BEFORE INSERT ON "scripts"."bundles" FOR EACH ROW EXECUTE FUNCTION "scripts"."tr_bundles_pre_insert"();
 
 
@@ -2569,6 +2560,10 @@ GRANT ALL ON FUNCTION "scripts"."max_stage"("script_id" "uuid", "target_stage" "
 GRANT ALL ON FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_stage" "scripts"."stage") TO "anon";
 GRANT ALL ON FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_stage" "scripts"."stage") TO "authenticated";
 GRANT ALL ON FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_stage" "scripts"."stage") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "scripts"."tr_bundles_check_scripts"() FROM PUBLIC;
 
 
 
