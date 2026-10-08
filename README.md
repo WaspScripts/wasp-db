@@ -14,13 +14,16 @@ anyone inspect the database design or spin up a matching instance from scratch.
 - All functions (including trigger functions)
 - All triggers
 - All Row Level Security (RLS) policies
+- RLS policies on Supabase's `storage` schema (`supabase/storage_policies.sql`)
 - Foreign table definitions for the Stripe wrapper (`stripe` schema) — these reference
   a foreign server by name only; no credentials are included (see below)
 
 Supabase's own internal schemas (`auth`, `storage`, `realtime`, `extensions`, `vault`,
 `cron`, `net`, `pgbouncer`, `pgsodium`, etc.) are intentionally excluded. These are
 recreated automatically by Supabase's own Docker images when you spin up a fresh
-self-hosted instance — they don't belong to this project.
+self-hosted instance — they don't belong to this project. The one exception is the RLS
+policies on `storage` tables (e.g. `storage.objects`), which are project-specific and
+are kept in `supabase/storage_policies.sql`.
 
 ## What's NOT included (by design)
 
@@ -44,7 +47,8 @@ self-hosted instance — they don't belong to this project.
    supabase db push --db-url "postgresql://postgres:<password>@<host>:<port>/postgres"
    ```
 
-4. If you use the Stripe Wrapper, create the foreign server and Vault secret yourself —
+4. Apply `supabase/storage_policies.sql` to recreate the storage bucket access rules.
+5. If you use the Stripe Wrapper, create the foreign server and Vault secret yourself —
    see Supabase's Wrappers docs linked above. This repo does not include that setup
    since it's credential-specific to each deployment.
 
@@ -56,8 +60,11 @@ to date automatically by `.github/workflows/schema-sync.yml`, which:
 1. Runs every 24 hours (and can be triggered manually from the Actions tab).
 2. Dumps the schema for `public,profiles,scripts,stats,stripe,info` using credentials
    stored as repo secrets (never committed, never printed in logs).
-3. Runs a grep-based secret scan over the fresh dump as a safety net before committing.
-4. Commits and pushes `supabase/schema.sql` only if it actually changed.
+3. Dumps the `storage` schema separately and extracts only its RLS statements into
+   `supabase/storage_policies.sql`.
+4. Runs a grep-based secret scan over the fresh dumps as a safety net before committing.
+5. Commits and pushes `supabase/schema.sql` and `supabase/storage_policies.sql` only if
+   they actually changed.
 
 ### Required repo secrets
 

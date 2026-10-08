@@ -32,9 +32,30 @@ jobs:
             --schema public,profiles,scripts,stats,stripe,info \
             -f supabase/schema.sql
 
+      # The storage schema itself is managed by Supabase, so only its RLS policies are kept.
+      - name: Dump storage RLS policies
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          supabase db dump \
+            --db-url "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/postgres" \
+            --schema storage \
+            -f "$RUNNER_TEMP/storage.sql"
+          {
+            echo "-- RLS policies for Supabase's storage schema (extracted from a full storage dump)."
+            echo
+            awk '
+              /^CREATE POLICY / || /^ALTER TABLE .* ENABLE ROW LEVEL SECURITY;/ { capture = 1 }
+              capture { print; if (/;[[:space:]]*$/) { capture = 0; print "" } }
+            ' "$RUNNER_TEMP/storage.sql"
+          } > supabase/storage_policies.sql
+
       - name: Check for secrets before committing
         run: |
-          if grep -inE "secret|api_key|password|token|key_id" supabase/schema.sql \
+          if grep -inE "secret|api_key|password|token|key_id" supabase/schema.sql supabase/storage_policies.sql \
             | grep -ivE "secret_key|secret text|decrypted_secret|WEBHOOK_SECRET|generate_hmac|path_tokens|x-simba-secret', *[a-z_]+\b"; then
             echo "::error::Potential secret found in schema dump — aborting commit."
             exit 1
@@ -44,10 +65,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- supabase/schema.sql; then
+          git add -N supabase/storage_policies.sql
+          if git diff --quiet -- supabase/schema.sql supabase/storage_policies.sql; then
             echo "No schema changes detected."
           else
-            git add supabase/schema.sql
+            git add supabase/schema.sql supabase/storage_policies.sql
             git commit -m "Sync schema snapshot [automated]"
             git push
           fi
