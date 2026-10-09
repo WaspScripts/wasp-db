@@ -515,3 +515,27 @@ services:
         type: bind
         source: ./volumes/pooler/pooler.exs
         target: /etc/pooler/pooler.exs
+  wasp-db-sync:
+    image: 'postgres:17-alpine'
+    init: true
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - "apk add --no-cache bash git openssh-client sed gawk grep >/dev/null && printf '#!/bin/sh\\nexec bash /opt/sync.sh\\n' > /usr/local/bin/sync && chmod +x /usr/local/bin/sync && exec sleep infinity"
+    environment:
+      - 'PGHOST=${POSTGRES_HOSTNAME:-supabase-db}'
+      - 'PGPORT=${POSTGRES_PORT:-5432}'
+      - PGUSER=postgres
+      - 'PGPASSWORD=${SERVICE_PASSWORD_POSTGRES}'
+      - 'PGDATABASE=${POSTGRES_DB:-postgres}'
+      - 'GIT_REPO=git@github.com:WaspScripts/wasp-db.git'
+      - 'DEPLOY_KEY=${WASP_DB_DEPLOY_KEY}'
+    volumes:
+      -
+        type: bind
+        source: ./volumes/wasp-db-sync/sync.sh
+        target: /opt/sync.sh
+    exclude_from_hc: true
