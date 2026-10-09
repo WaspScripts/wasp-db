@@ -104,8 +104,6 @@ services:
     depends_on:
       supabase-vector:
         condition: service_healthy
-    ports:
-      - '5431:${POSTGRES_PORT:-5432}'
     command:
       - postgres
       - '-c'
