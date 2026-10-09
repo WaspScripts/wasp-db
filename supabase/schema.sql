@@ -172,6 +172,18 @@ COMMENT ON TYPE "stripe"."cycle" IS 'Recurring payment intervals';
 
 
 
+CREATE OR REPLACE FUNCTION "profiles"."add_balance"("account" "text", "amount" bigint) RETURNS boolean
+    LANGUAGE "sql"
+    SET "search_path" TO ''
+    AS $$
+      WITH u AS (UPDATE profiles.balances SET balance = balance + amount WHERE stripe = account RETURNING 1)
+      SELECT EXISTS (SELECT 1 FROM u);
+$$;
+
+
+ALTER FUNCTION "profiles"."add_balance"("account" "text", "amount" bigint) OWNER TO "supabase_admin";
+
+
 CREATE OR REPLACE FUNCTION "profiles"."can_access"("script_id" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE
     SET "search_path" TO ''
@@ -223,11 +235,11 @@ CREATE OR REPLACE FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script
                                               OR v.role >= 'tester'::profiles.roles
                                               OR EXISTS (
                                                       SELECT 1 FROM profiles.subscriptions su
-                                                      WHERE su.user_id = accesser_id AND su.date_end > CURRENT_DATE AND su.product IN (SELECT id FROM granting)
+                                                      WHERE su.user_id = accesser_id AND su.date_end > now() AND su.product IN (SELECT id FROM granting)
                                               )
                                               OR EXISTS (
                                                       SELECT 1 FROM profiles.free_access fa
-                                                      WHERE fa.user_id = accesser_id AND fa.date_end > CURRENT_DATE AND fa.product IN (SELECT id FROM granting)
+                                                      WHERE fa.user_id = accesser_id AND fa.date_end > now() AND fa.product IN (SELECT id FROM granting)
                                               )
                                       )
                               )
@@ -2476,6 +2488,11 @@ GRANT USAGE ON SCHEMA "stats" TO "service_role";
 GRANT USAGE ON SCHEMA "stripe" TO "anon";
 GRANT USAGE ON SCHEMA "stripe" TO "authenticated";
 GRANT USAGE ON SCHEMA "stripe" TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "profiles"."add_balance"("account" "text", "amount" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "profiles"."add_balance"("account" "text", "amount" bigint) TO "service_role";
 
 
 
