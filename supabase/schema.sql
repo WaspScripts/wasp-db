@@ -2351,15 +2351,15 @@ CREATE POLICY "SELECT for EVERYONE" ON "stats"."values_custom" FOR SELECT USING 
 
 
 
+CREATE POLICY "SELECT for OWNER" ON "stats"."online" FOR SELECT TO "authenticated" USING (("scripts"."is_author"("profiles"."uid"(), "script_id") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+
+
+
 CREATE POLICY "SELECT for OWNER" ON "stats"."website" FOR SELECT USING (("scripts"."is_author"("profiles"."uid"(), "id") OR "profiles"."is_role"("profiles"."uid"(), 'administrator'::"profiles"."roles")));
 
 
 
 CREATE POLICY "SELECT for OWNER" ON "stats"."website_monthly" FOR SELECT TO "authenticated" USING (("profiles"."is_role"("profiles"."uid"(), 'administrator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
-
-
-
-CREATE POLICY "SELECT for SCRIPTER" ON "stats"."online" FOR SELECT TO "authenticated" USING ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
 
 
 
@@ -2757,8 +2757,6 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"
 
 
 
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."author_scripts" TO "anon";
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."author_scripts" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."author_scripts" TO "service_role";
 
 

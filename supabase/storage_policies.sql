@@ -6,7 +6,7 @@ CREATE POLICY "INSER for SERVICE_USER zhrzhi_0" ON "storage"."objects" FOR INSER
 
 CREATE POLICY "INSERT for OWNER vuzwg8_0" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK ((("bucket_id" = 'scripts'::"text") AND ("scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[1])::"uuid") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))));
 
-CREATE POLICY "INSERT for SCRIPTER 1xd00_0" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK ((("bucket_id" = 'imgs'::"text") AND ("scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))));
+CREATE POLICY "INSERT for SCRIPTER 1xd00_0" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK ((("bucket_id" = 'imgs'::"text") AND ((("array_length"("storage"."foldername"("name"), 1) = 2) AND (("storage"."foldername"("name"))[1] = 'scripts'::"text") AND ("storage"."filename"("name") = ANY (ARRAY['cover.webp'::"text", 'banner.webp'::"text"])) AND "scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid")) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))));
 
 CREATE POLICY "INSERT for SERVICE USER 1r5xns0_0" ON "storage"."objects" FOR INSERT TO "service_role" WITH CHECK (("bucket_id" = 'plugins'::"text"));
 
@@ -34,7 +34,7 @@ CREATE POLICY "SELECT for EVERYONE k1j406_0" ON "storage"."objects" FOR SELECT U
 
 CREATE POLICY "UPDATE  for SERVICE_USER 1bqp9qb_1" ON "storage"."objects" FOR UPDATE TO "service_role" USING (("bucket_id" = 'assets'::"text")) WITH CHECK (("bucket_id" = 'assets'::"text"));
 
-CREATE POLICY "UPDATE for OWNER 1xd00_0" ON "storage"."objects" FOR UPDATE USING ((("bucket_id" = 'imgs'::"text") AND ("scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")))) WITH CHECK ((("bucket_id" = 'imgs'::"text") AND ("scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))));
+CREATE POLICY "UPDATE for OWNER 1xd00_0" ON "storage"."objects" FOR UPDATE USING ((("bucket_id" = 'imgs'::"text") AND ((("array_length"("storage"."foldername"("name"), 1) = 2) AND (("storage"."foldername"("name"))[1] = 'scripts'::"text") AND ("storage"."filename"("name") = ANY (ARRAY['cover.webp'::"text", 'banner.webp'::"text"])) AND "scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid")) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")))) WITH CHECK ((("bucket_id" = 'imgs'::"text") AND ((("array_length"("storage"."foldername"("name"), 1) = 2) AND (("storage"."foldername"("name"))[1] = 'scripts'::"text") AND ("storage"."filename"("name") = ANY (ARRAY['cover.webp'::"text", 'banner.webp'::"text"])) AND "scripts"."is_author"("profiles"."uid"(), (("storage"."foldername"("name"))[2])::"uuid")) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))));
 
 CREATE POLICY "UPDATE for SERVICE USER 1r5xns0_1" ON "storage"."objects" FOR UPDATE TO "service_role" USING (("bucket_id" = 'plugins'::"text")) WITH CHECK (("bucket_id" = 'plugins'::"text"));
 
