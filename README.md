@@ -55,45 +55,35 @@ are kept in `supabase/storage_policies.sql`.
 ## Keeping the schema in sync
 
 `supabase/schema.sql` is the live, always-current snapshot of the schema. It's kept up
-to date automatically by `.github/workflows/schema-sync.yml`, which:
+to date by the `wasp-db-sync` container, which runs inside the Supabase stack
+(`docker-compose.yml`) and reaches Postgres over the internal Docker network, so the
+database never needs to be exposed to the internet. Its script,
+`volumes/wasp-db-sync/sync.sh`:
 
-1. Runs every 24 hours (and can be triggered manually from the Actions tab).
-2. Dumps the schema for `public,profiles,scripts,stats,stripe,info` using credentials
-   stored as repo secrets (never committed, never printed in logs).
-3. Dumps the `storage` schema separately and extracts only its RLS statements into
+1. Dumps the schema for `public,profiles,scripts,stats,stripe,info` with the same
+   `pg_dump` flags and `sed` cleanup that `supabase db dump` uses, so the output format
+   is identical.
+2. Dumps the `storage` schema separately and extracts only its RLS statements into
    `supabase/storage_policies.sql`.
-4. Runs a grep-based secret scan over the fresh dumps as a safety net before committing.
-5. Commits and pushes `supabase/schema.sql` and `supabase/storage_policies.sql` only if
+3. Runs a grep-based secret scan over the fresh dumps as a safety net before committing.
+4. Commits and pushes `supabase/schema.sql` and `supabase/storage_policies.sql` only if
    they actually changed.
 
-### Required repo secrets
-
-Set these under Settings → Secrets and variables → Actions:
-
-| Secret | Description |
-| --- | --- |
-| `DB_HOST` | IP or hostname of the self-hosted Postgres instance |
-| `DB_PORT` | Port Postgres is listening on |
-| `DB_USER` | Postgres role to connect as (e.g. `postgres`) |
-| `DB_PASSWORD` | Password for that role |
-
-The workflow builds the connection string from these at run time, so none of them ever
-appear in this repo or in workflow logs.
-
-### Manual dump
-
-To regenerate the snapshot locally instead of waiting for the scheduled run:
+It runs every 24 hours as a Coolify scheduled task. To run it on demand, open the
+`wasp-db-sync` container's terminal and run:
 
 ```bash
-supabase db dump \
-  --db-url "postgresql://<user>:<password>@<host>:<port>/postgres" \
-  --schema public,profiles,scripts,stats,stripe,info \
-  -f supabase/schema.sql
+sync
 ```
 
-Always grep new dumps for `secret|api_key|password|token|key_id` before committing,
-to catch anything that shouldn't be published — the automated workflow does this too,
-but double-check manual runs yourself.
+### Required environment variable
+
+| Variable | Description |
+| --- | --- |
+| `WASP_DB_DEPLOY_KEY` | Base64 of the private key of a write-enabled deploy key for this repo (`base64 -w0 <key>`) |
+
+The database credentials come from the stack's existing `SERVICE_PASSWORD_POSTGRES`, so
+nothing database-related is stored outside the server.
 
 ## Migrations
 
