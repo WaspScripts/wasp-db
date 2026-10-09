@@ -1167,6 +1167,8 @@ CREATE TABLE IF NOT EXISTS "profiles"."scripters" (
     "description" "text",
     "content" "text",
     "url" "text" DEFAULT ("auth"."uid"())::"text" NOT NULL,
+    CONSTRAINT "scripters_content_length" CHECK ((("content" IS NULL) OR ("length"("content") <= 20000))),
+    CONSTRAINT "scripters_description_length" CHECK ((("description" IS NULL) OR (("length"("description") >= 6) AND ("length"("description") <= 32)))),
     CONSTRAINT "scripters_github_check" CHECK ((("github" IS NULL) OR ("github" ~ '^[A-Za-z0-9-]{1,39}$'::"text")))
 );
 
@@ -1266,7 +1268,10 @@ CREATE TABLE IF NOT EXISTS "scripts"."scripts" (
     "title" "text" NOT NULL,
     "description" "text" NOT NULL,
     "content" "text" NOT NULL,
-    "published" boolean DEFAULT false NOT NULL
+    "published" boolean DEFAULT false NOT NULL,
+    CONSTRAINT "scripts_content_length" CHECK (("length"("content") <= 20000)),
+    CONSTRAINT "scripts_description_length" CHECK ((("length"("description") >= 10) AND ("length"("description") <= 160))),
+    CONSTRAINT "scripts_title_length" CHECK ((("length"("title") >= 4) AND ("length"("title") <= 31)))
 );
 
 
@@ -1350,7 +1355,8 @@ CREATE TABLE IF NOT EXISTS "stats"."limits" (
     "xp_min" integer DEFAULT 0 NOT NULL,
     "xp_max" integer DEFAULT 0 NOT NULL,
     "gp_min" bigint DEFAULT '0'::bigint NOT NULL,
-    "gp_max" bigint DEFAULT '0'::bigint NOT NULL
+    "gp_max" bigint DEFAULT '0'::bigint NOT NULL,
+    CONSTRAINT "limits_ranges" CHECK ((("xp_min" >= 0) AND ("xp_max" <= 60000) AND ("gp_min" >= '-200000'::integer) AND ("gp_max" <= 600000) AND ("xp_min" <= "xp_max") AND ("gp_min" <= "gp_max")))
 );
 
 
@@ -1361,7 +1367,8 @@ CREATE TABLE IF NOT EXISTS "stats"."limits_custom" (
     "id" "uuid" NOT NULL,
     "trackers" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     "minima" bigint[] DEFAULT '{}'::bigint[] NOT NULL,
-    "maxima" bigint[] DEFAULT '{}'::bigint[] NOT NULL
+    "maxima" bigint[] DEFAULT '{}'::bigint[] NOT NULL,
+    CONSTRAINT "limits_custom_shape" CHECK ((("cardinality"("trackers") = "cardinality"("minima")) AND ("cardinality"("minima") = "cardinality"("maxima")) AND ("cardinality"("trackers") <= 50)))
 );
 
 
@@ -2762,9 +2769,17 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"
 
 
 
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."bundles" TO "anon";
-GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."bundles" TO "authenticated";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "scripts"."bundles" TO "anon";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE ON TABLE "scripts"."bundles" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "scripts"."bundles" TO "service_role";
+
+
+
+GRANT UPDATE("name") ON TABLE "scripts"."bundles" TO "authenticated";
+
+
+
+GRANT UPDATE("scripts") ON TABLE "scripts"."bundles" TO "authenticated";
 
 
 
