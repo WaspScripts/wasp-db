@@ -1166,7 +1166,8 @@ CREATE TABLE IF NOT EXISTS "profiles"."scripters" (
     "paypal" "text",
     "description" "text",
     "content" "text",
-    "url" "text" DEFAULT ("auth"."uid"())::"text" NOT NULL
+    "url" "text" DEFAULT ("auth"."uid"())::"text" NOT NULL,
+    CONSTRAINT "scripters_github_check" CHECK ((("github" IS NULL) OR "starts_with"("github", 'https://github.com/'::"text")))
 );
 
 
