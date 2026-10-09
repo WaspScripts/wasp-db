@@ -173,12 +173,10 @@ COMMENT ON TYPE "stripe"."cycle" IS 'Recurring payment intervals';
 
 
 CREATE OR REPLACE FUNCTION "profiles"."can_access"("script_id" "uuid") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "sql" STABLE
     SET "search_path" TO ''
     AS $$
-BEGIN
-  RETURN profiles.can_access(auth.uid(), script_id);
-END;
+      SELECT profiles.can_access(auth.uid(), script_id);
 $$;
 
 
@@ -186,34 +184,56 @@ ALTER FUNCTION "profiles"."can_access"("script_id" "uuid") OWNER TO "supabase_ad
 
 
 CREATE OR REPLACE FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script_id" "uuid") RETURNS boolean
-    LANGUAGE "sql" STABLE
+    LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
+    SET "row_security" TO 'off'
     AS $$
-      WITH granting AS (
-              SELECT p.id
-              FROM stripe.products p
-              WHERE p.script = script_id
-                      OR p.bundle IN (SELECT b.id FROM scripts.bundles b WHERE script_id = ANY(b.scripts))
+      WITH viewer AS (
+              SELECT role FROM profiles.profiles WHERE id = accesser_id
+      ),
+      script AS (
+              SELECT p.author, m.type, m.stage, s.published
+              FROM scripts.scripts s
+              JOIN scripts.metadata m ON m.id = s.id
+              JOIN scripts.protected p ON p.id = s.id
+              WHERE s.id = script_id
+      ),
+      granting AS (
+              SELECT pr.id
+              FROM stripe.products pr
+              WHERE pr.active
+                      AND (pr.script = script_id
+                              OR pr.bundle IN (SELECT b.id FROM scripts.bundles b WHERE script_id = ANY(b.scripts)))
       )
       SELECT
-              EXISTS (SELECT 1 FROM scripts.protected WHERE id = script_id AND author = accesser_id)
-              OR profiles.min_role(accesser_id, 'moderator'::profiles.roles)
-              OR COALESCE((
-                      SELECT m.stage <> 'archived'::scripts.stage AND (
-                              m.type <> 'premium'::scripts.type
-                              OR (m.stage >= 'alpha'::scripts.stage AND profiles.min_role(accesser_id, 'tester'::profiles.roles))
-                              OR EXISTS (
-                                      SELECT 1 FROM profiles.subscriptions s
-                                      WHERE s.user_id = accesser_id AND s.date_end > CURRENT_DATE AND s.product IN (SELECT id FROM granting)
+              (accesser_id IS NOT DISTINCT FROM auth.uid() OR COALESCE(auth.role(), 'service_role') = 'service_role')
+              AND COALESCE((
+                      SELECT
+                              sc.author = accesser_id
+                              OR v.role >= 'moderator'::profiles.roles
+                              OR (
+                                      CASE sc.stage
+                                              WHEN 'alpha'::scripts.stage THEN v.role >= 'tester'::profiles.roles
+                                              WHEN 'beta'::scripts.stage THEN sc.published
+                                              WHEN 'stable'::scripts.stage THEN sc.published
+                                              ELSE false
+                                      END
+                                      AND (
+                                              sc.type <> 'premium'::scripts.type
+                                              OR v.role >= 'tester'::profiles.roles
+                                              OR EXISTS (
+                                                      SELECT 1 FROM profiles.subscriptions su
+                                                      WHERE su.user_id = accesser_id AND su.date_end > CURRENT_DATE AND su.product IN (SELECT id FROM granting)
+                                              )
+                                              OR EXISTS (
+                                                      SELECT 1 FROM profiles.free_access fa
+                                                      WHERE fa.user_id = accesser_id AND fa.date_end > CURRENT_DATE AND fa.product IN (SELECT id FROM granting)
+                                              )
+                                      )
                               )
-                              OR EXISTS (
-                                      SELECT 1 FROM profiles.free_access fa
-                                      WHERE fa.user_id = accesser_id AND fa.date_end > CURRENT_DATE AND fa.product IN (SELECT id FROM granting)
-                              )
-                      )
-                      FROM scripts.metadata m
-                      WHERE m.id = script_id
-              ), true);
+                      FROM script sc
+                      LEFT JOIN viewer v ON true
+              ), false);
 $$;
 
 
