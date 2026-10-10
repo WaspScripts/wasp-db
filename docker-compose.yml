@@ -530,7 +530,7 @@ services:
         type: bind
         source: ./volumes/pooler/pooler.exs
         target: /etc/pooler/pooler.exs
-  wasp-db-sync:
+  db-utils:
     image: 'postgres:17-alpine'
     init: true
     depends_on:
@@ -539,7 +539,7 @@ services:
     entrypoint:
       - /bin/sh
       - '-c'
-      - "apk add --no-cache bash git openssh-client sed gawk grep >/dev/null && printf '#!/bin/sh\\nexec bash /opt/sync.sh\\n' > /usr/local/bin/sync && chmod +x /usr/local/bin/sync && exec sleep infinity"
+      - "apk add --no-cache bash git openssh-client sed gawk grep >/dev/null && printf '#!/bin/sh\\nexec bash /opt/db-utils/sync.sh\\n' > /usr/local/bin/sync && printf '#!/bin/sh\\nexec bash /opt/db-utils/trim-logs.sh\\n' > /usr/local/bin/trim-logs && chmod +x /usr/local/bin/sync /usr/local/bin/trim-logs && exec sleep infinity"
     environment:
       - 'PGHOST=${POSTGRES_HOSTNAME:-supabase-db}'
       - 'PGPORT=${POSTGRES_PORT:-5432}'
@@ -551,6 +551,10 @@ services:
     volumes:
       -
         type: bind
-        source: ./volumes/wasp-db-sync/sync.sh
-        target: /opt/sync.sh
+        source: ./volumes/db-utils/sync.sh
+        target: /opt/db-utils/sync.sh
+      -
+        type: bind
+        source: ./volumes/db-utils/trim-logs.sh
+        target: /opt/db-utils/trim-logs.sh
     exclude_from_hc: true

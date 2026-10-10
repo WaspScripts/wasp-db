@@ -55,10 +55,10 @@ are kept in `supabase/storage_policies.sql`.
 ## Keeping the schema in sync
 
 `supabase/schema.sql` is the live, always-current snapshot of the schema. It's kept up
-to date by the `wasp-db-sync` container, which runs inside the Supabase stack
+to date by the `db-utils` container, which runs inside the Supabase stack
 (`docker-compose.yml`) and reaches Postgres over the internal Docker network, so the
 database never needs to be exposed to the internet. Its script,
-`volumes/wasp-db-sync/sync.sh`:
+`volumes/db-utils/sync.sh`:
 
 1. Dumps the schema for `public,profiles,scripts,stats,stripe,info` with the same
    `pg_dump` flags and `sed` cleanup that `supabase db dump` uses, so the output format
@@ -70,7 +70,7 @@ database never needs to be exposed to the internet. Its script,
    they actually changed.
 
 It runs every 24 hours as a Coolify scheduled task. To run it on demand, open the
-`wasp-db-sync` container's terminal and run:
+`db-utils` container's terminal and run:
 
 ```bash
 sync
@@ -84,6 +84,19 @@ sync
 
 The database credentials come from the stack's existing `SERVICE_PASSWORD_POSTGRES`, so
 nothing database-related is stored outside the server.
+
+## Trimming Logflare logs
+
+The same `db-utils` container also runs `volumes/db-utils/trim-logs.sh` weekly as a
+Coolify scheduled task. It connects to the `_supabase` database as `supabase_admin`,
+calls `analytics_cleanup_old_logs()` and then runs `VACUUM ANALYZE`.
+To run it on demand, open the `db-utils` container's terminal and run:
+
+```bash
+trim-logs
+```
+
+The scheduled task definitions are kept in `cron_tasks/` for reference.
 
 ## Migrations
 
