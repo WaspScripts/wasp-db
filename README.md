@@ -1,6 +1,6 @@
 # wasp-db
 
-Open-source schema for the self-hosted Supabase instance behind the WASP projects.
+Open-source schema for the self-hosted Supabase instance behind the WaspScripts projects which is hosted through a self-hosted Coolify instance.
 
 This repo contains **structure only** — tables, columns, functions, triggers, views,
 RLS policies, and foreign table definitions — with **no row data**. It's meant to let
@@ -78,8 +78,8 @@ sync
 
 ### Required environment variable
 
-| Variable | Description |
-| --- | --- |
+| Variable             | Description                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------ |
 | `WASP_DB_DEPLOY_KEY` | Base64 of the private key of a write-enabled deploy key for this repo (`base64 -w0 <key>`) |
 
 The database credentials come from the stack's existing `SERVICE_PASSWORD_POSTGRES`, so
