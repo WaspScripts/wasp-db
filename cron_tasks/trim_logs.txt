@@ -1,0 +1,5 @@
+Name: Trim logflare logs
+Schedule: 0 0 * * 0
+Timeout: 900
+Service: supabase-db
+Command: PGPASSWORD="POSTGRES_PASSWORD" psql -U supabase_admin -d _supabase -c "SELECT analytics_cleanup_old_logs();" -c "VACUUM ANALYZE;"

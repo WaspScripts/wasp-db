@@ -1,0 +1,5 @@
+Name: wasp-db sync
+Schedule: 0 3 * * *
+Timeout: 300
+Service: wasp-db-sync
+Command: sync
