@@ -215,7 +215,7 @@ CREATE OR REPLACE FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script
               FROM stripe.products pr
               WHERE pr.active
                       AND (pr.script = script_id
-                              OR pr.bundle IN (SELECT b.id FROM scripts.bundles b WHERE script_id = ANY(b.scripts)))
+                              OR pr.bundle IN (SELECT b.id FROM scripts.bundles b WHERE b.scripts @> ARRAY[script_id]))
       )
       SELECT
               (accesser_id IS NOT DISTINCT FROM auth.uid() OR COALESCE(auth.role(), 'service_role') = 'service_role')
@@ -253,46 +253,26 @@ ALTER FUNCTION "profiles"."can_access"("accesser_id" "uuid", "script_id" "uuid")
 
 
 CREATE OR REPLACE FUNCTION "profiles"."can_view"("viewer_id" "uuid", "script_id" "uuid") RETURNS boolean
-    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     SET "row_security" TO 'off'
     AS $$
-BEGIN
-	-- author check
-	IF EXISTS ( 
-		SELECT 1 FROM scripts.protected WHERE script_id = id AND author = viewer_id
-	) THEN
-		RETURN true;
-	END IF;
-	
-	-- mod/admin check
-	IF (profiles.min_role(viewer_id, 'moderator'::profiles.roles)) THEN
-		RETURN true;
-	END IF;
-
-	IF (
-		scripts.is_stage(script_id, 'archived'::scripts.stage) OR
-		scripts.is_stage(script_id, 'prototype'::scripts.stage)
-	) THEN
-		RETURN false;
-	END IF;
-
-	-- tester/scripter and script alpha+ check
-	IF (scripts.is_stage(script_id, 'alpha'::scripts.stage)) THEN
-		IF (profiles.min_role(viewer_id, 'tester'::profiles.roles)) THEN
-			RETURN true;
-		END IF;
-		RETURN false;
-	END IF;
-
-	IF EXISTS ( 
-		SELECT 1 FROM scripts.scripts WHERE script_id = id AND published = true
-	) THEN
-		RETURN true;
-	END IF;
-	
-	RETURN false;
-END;
+      SELECT COALESCE((
+        SELECT
+          p.author = viewer_id
+          OR COALESCE(v.role >= 'moderator'::profiles.roles, false)
+          OR CASE m.stage
+               WHEN 'archived'::scripts.stage THEN false
+               WHEN 'prototype'::scripts.stage THEN false
+               WHEN 'alpha'::scripts.stage THEN COALESCE(v.role >= 'tester'::profiles.roles, false)
+               ELSE s.published
+             END
+        FROM scripts.scripts s
+        LEFT JOIN scripts.protected p ON p.id = s.id
+        LEFT JOIN scripts.metadata m ON m.id = s.id
+        LEFT JOIN profiles.profiles v ON v.id = viewer_id
+        WHERE s.id = script_id
+      ), false);
 $$;
 
 
@@ -300,7 +280,7 @@ ALTER FUNCTION "profiles"."can_view"("viewer_id" "uuid", "script_id" "uuid") OWN
 
 
 CREATE OR REPLACE FUNCTION "profiles"."can_view_subscription"("accesser" "uuid", "owner" "uuid", "product" "text") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$BEGIN
   RETURN
@@ -317,7 +297,7 @@ ALTER FUNCTION "profiles"."can_view_subscription"("accesser" "uuid", "owner" "uu
 
 
 CREATE OR REPLACE FUNCTION "profiles"."get_avatar"("userid" "uuid") RETURNS "text"
-    LANGUAGE "plpgsql" SECURITY DEFINER
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 DECLARE
@@ -339,7 +319,7 @@ ALTER FUNCTION "profiles"."get_avatar"("userid" "uuid") OWNER TO "supabase_admin
 
 
 CREATE OR REPLACE FUNCTION "profiles"."get_discord_id"("userid" "uuid") RETURNS "text"
-    LANGUAGE "plpgsql" IMMUTABLE
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$
 DECLARE  
@@ -368,7 +348,7 @@ ALTER FUNCTION "profiles"."get_roles_enum"() OWNER TO "supabase_admin";
 
 
 CREATE OR REPLACE FUNCTION "profiles"."get_username"("userid" "uuid") RETURNS "text"
-    LANGUAGE "plpgsql" IMMUTABLE SECURITY DEFINER
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$DECLARE
     data jsonb;
@@ -393,7 +373,7 @@ ALTER FUNCTION "profiles"."get_username"("userid" "uuid") OWNER TO "supabase_adm
 
 
 CREATE OR REPLACE FUNCTION "profiles"."is_role"("target_role" "profiles"."roles") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$
 BEGIN
@@ -406,7 +386,7 @@ ALTER FUNCTION "profiles"."is_role"("target_role" "profiles"."roles") OWNER TO "
 
 
 CREATE OR REPLACE FUNCTION "profiles"."is_role"("user_id" "uuid", "target_role" "profiles"."roles") RETURNS boolean
-    LANGUAGE "sql"
+    LANGUAGE "sql" STABLE
     SET "search_path" TO ''
     AS $$
   SELECT COALESCE(
@@ -506,7 +486,7 @@ ALTER FUNCTION "profiles"."tr_scritpers_pre_insert"() OWNER TO "supabase_admin";
 
 
 CREATE OR REPLACE FUNCTION "profiles"."uid"() RETURNS "uuid"
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$BEGIN
    RETURN auth.uid();
@@ -593,7 +573,7 @@ ALTER FUNCTION "public"."get_wasplib_hash"() OWNER TO "supabase_admin";
 
 CREATE OR REPLACE FUNCTION "public"."webhook"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO 'public'
+    SET "search_path" TO ''
     AS $$DECLARE
     secret text;
     payload jsonb;
@@ -603,7 +583,6 @@ CREATE OR REPLACE FUNCTION "public"."webhook"() RETURNS "trigger"
 BEGIN
     SELECT decrypted_secret INTO secret FROM vault.decrypted_secrets WHERE name = 'WEBHOOK_SECRET' LIMIT 1;
 
-    -- Generate the payload
     payload = jsonb_build_object(
             'old_record', old,
             'record', new,
@@ -612,17 +591,14 @@ BEGIN
             'schema', tg_table_schema
               );
 
-    -- Generate the signature
-    signature = generate_hmac(secret, payload::text);
+    signature = public.generate_hmac(secret, payload::text);
 
-    -- Build dynamic URL
     url := format(
         'https://waspscripts.com/api/supabase/%s/%s',
         tg_table_schema,
         tg_table_name
     );
 
-    -- Send the webhook request
     SELECT http_post
     INTO request_id
     FROM
@@ -637,7 +613,6 @@ BEGIN
                 '4000'
         );
 
-    -- Insert the request ID into the Supabase hooks table
     INSERT INTO supabase_functions.hooks
         (hook_table_id, hook_name, request_id)
     VALUES (tg_relid, tg_name, request_id);
@@ -693,7 +668,7 @@ ALTER FUNCTION "scripts"."cron_update_simba_versions"() OWNER TO "supabase_admin
 
 
 CREATE OR REPLACE FUNCTION "scripts"."get_revision"("script_id" "uuid") RETURNS integer
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$begin
 	return (select revision
@@ -706,7 +681,7 @@ ALTER FUNCTION "scripts"."get_revision"("script_id" "uuid") OWNER TO "supabase_a
 
 
 CREATE OR REPLACE FUNCTION "scripts"."is_author"("user_id" "uuid", "script_id" "uuid") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$BEGIN
   RETURN
@@ -720,7 +695,7 @@ ALTER FUNCTION "scripts"."is_author"("user_id" "uuid", "script_id" "uuid") OWNER
 
 
 CREATE OR REPLACE FUNCTION "scripts"."is_premium"("script_id" "uuid") RETURNS boolean
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$BEGIN
   RETURN
@@ -736,7 +711,7 @@ ALTER FUNCTION "scripts"."is_premium"("script_id" "uuid") OWNER TO "supabase_adm
 
 
 CREATE OR REPLACE FUNCTION "scripts"."is_stage"("script_id" "uuid", "target_stage" "scripts"."stage") RETURNS boolean
-    LANGUAGE "sql"
+    LANGUAGE "sql" STABLE
     SET "search_path" TO ''
     AS $$SELECT COALESCE(s.stage = target_stage, false)
     FROM scripts.metadata s
@@ -957,46 +932,6 @@ $$;
 
 
 ALTER FUNCTION "scripts"."tr_simba_post_upsert"() OWNER TO "supabase_admin";
-
-
-CREATE OR REPLACE FUNCTION "scripts"."tr_storage_objects_insert"() RETURNS "trigger"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$DECLARE
-	script_id text;
-	script_revision smallint;
-	revision_path text;
-	script_file text;
-BEGIN
-	IF new.bucket_id <> 'scripts' THEN
-		RETURN NEW;
-	END IF;
-	
-	script_id := (storage.foldername(NEW.name))[1];
-	script_revision := (scripts.get_revision(script_id::uuid) + 1);
-	revision_path := lpad(script_revision::text, 9, '0');
-	script_file := storage.filename(NEW.name);
-	
-	NEW.name := script_id || '/' || revision_path || '/' || script_file;
-	NEW.path_tokens := ARRAY[script_id, revision_path, script_file]::text[];
-
-	UPDATE scripts.protected
-	SET revision = script_revision, updated_at = NEW.created_at
-	WHERE id = script_id::uuid;
-
-	INSERT INTO scripts.versions (id, revision)
-	SELECT script_id::uuid, script_revision
-	WHERE NOT EXISTS (
-		SELECT 1 FROM scripts.versions
-		WHERE id = script_id::uuid
-			AND revision = script_revision
-	);
-
-	RETURN NEW;
-END;$$;
-
-
-ALTER FUNCTION "scripts"."tr_storage_objects_insert"() OWNER TO "supabase_admin";
 
 
 CREATE OR REPLACE FUNCTION "stats"."get_level"("experience" bigint) RETURNS integer
@@ -1837,10 +1772,6 @@ CREATE INDEX "free_access_date_end_idx" ON "profiles"."free_access" USING "btree
 
 
 
-CREATE INDEX "free_access_id_idx" ON "profiles"."free_access" USING "btree" ("id");
-
-
-
 CREATE INDEX "idx_profiles_free_access_product" ON "profiles"."free_access" USING "btree" ("product");
 
 
@@ -1857,15 +1788,11 @@ CREATE INDEX "idx_profiles_subscriptions_user_id" ON "profiles"."subscriptions" 
 
 
 
-CREATE INDEX "profiles_id_idx" ON "profiles"."profiles" USING "btree" ("id");
-
-
-
 CREATE INDEX "subscriptions_date_end_idx" ON "profiles"."subscriptions" USING "btree" ("date_end");
 
 
 
-CREATE INDEX "subscriptions_id_idx" ON "profiles"."subscriptions" USING "btree" ("id");
+CREATE INDEX "bundles_scripts_gin_idx" ON "scripts"."bundles" USING "gin" ("scripts");
 
 
 
@@ -1898,6 +1825,10 @@ CREATE INDEX "online_script_time_idx" ON "stats"."online" USING "btree" ("script
 
 
 CREATE INDEX "online_user_last_seen_idx" ON "stats"."online" USING "btree" ("user_id", "last_seen");
+
+
+
+CREATE INDEX "stats_experience_desc_idx" ON "stats"."stats" USING "btree" ("experience" DESC NULLS LAST);
 
 
 
@@ -2116,15 +2047,15 @@ ALTER TABLE ONLY "stripe"."products"
 
 
 
-CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."privacy_policy" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."privacy_policy" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
-CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."scripter_tos" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."scripter_tos" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
-CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."user_tos" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "INSERT for ADMINISTRATOR" ON "info"."user_tos" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
@@ -2149,15 +2080,15 @@ ALTER TABLE "info"."scripter_tos" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "info"."user_tos" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "DELETE for ADMINISTRATOR" ON "profiles"."scripters" FOR DELETE TO "authenticated" USING ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "DELETE for ADMINISTRATOR" ON "profiles"."scripters" FOR DELETE TO "authenticated" USING (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
-CREATE POLICY "INSERT for ADMINISTRATOR" ON "profiles"."balances" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "INSERT for ADMINISTRATOR" ON "profiles"."balances" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
-CREATE POLICY "INSERT for ADMINISTRATOR" ON "profiles"."scripters" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."is_role"('administrator'::"profiles"."roles"));
+CREATE POLICY "INSERT for ADMINISTRATOR" ON "profiles"."scripters" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."is_role"('administrator'::"profiles"."roles") AS "is_role"));
 
 
 
@@ -2177,19 +2108,23 @@ CREATE POLICY "SELECT for EVERYONE" ON "profiles"."scripters" FOR SELECT USING (
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "profiles"."balances" FOR SELECT TO "authenticated" USING ((("id" = "profiles"."uid"()) OR "profiles"."is_role"("profiles"."uid"(), 'administrator'::"profiles"."roles")));
+CREATE POLICY "SELECT for OWNER" ON "profiles"."balances" FOR SELECT TO "authenticated" USING ((("id" = ( SELECT "profiles"."uid"() AS "uid")) OR ( SELECT "profiles"."is_role"(( SELECT "profiles"."uid"() AS "uid"), 'administrator'::"profiles"."roles") AS "is_role")));
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "profiles"."free_access" FOR SELECT TO "authenticated" USING (("profiles"."can_view_subscription"("profiles"."uid"(), "user_id", "product") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "SELECT for OWNER" ON "profiles"."free_access" FOR SELECT TO "authenticated" USING ((("user_id" = ( SELECT "profiles"."uid"() AS "uid")) OR ("product" IN ( SELECT "products"."id"
+   FROM "stripe"."products"
+  WHERE ("products"."active" AND ("products"."user_id" = ( SELECT "profiles"."uid"() AS "uid"))))) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "profiles"."subscriptions" FOR SELECT TO "authenticated" USING (("profiles"."can_view_subscription"("profiles"."uid"(), "user_id", "product") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "SELECT for OWNER" ON "profiles"."subscriptions" FOR SELECT TO "authenticated" USING ((("user_id" = ( SELECT "profiles"."uid"() AS "uid")) OR ("product" IN ( SELECT "products"."id"
+   FROM "stripe"."products"
+  WHERE ("products"."active" AND ("products"."user_id" = ( SELECT "profiles"."uid"() AS "uid"))))) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
-CREATE POLICY "UPDATE for OWNER" ON "profiles"."scripters" FOR UPDATE TO "authenticated" USING ((("id" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))) WITH CHECK ((("id" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "UPDATE for OWNER" ON "profiles"."scripters" FOR UPDATE TO "authenticated" USING ((("id" = ( SELECT "profiles"."uid"() AS "uid")) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role"))) WITH CHECK ((("id" = ( SELECT "profiles"."uid"() AS "uid")) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
@@ -2224,23 +2159,23 @@ ALTER TABLE "profiles"."scripters" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "profiles"."subscriptions" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "INSERT for OWNER" ON "scripts"."versions" FOR INSERT TO "authenticated" WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "INSERT for OWNER" ON "scripts"."versions" FOR INSERT TO "authenticated" WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."bundles" FOR INSERT TO "authenticated" WITH CHECK (((("author" = "profiles"."uid"()) AND "profiles"."is_role"("profiles"."uid"(), 'scripter'::"profiles"."roles")) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."bundles" FOR INSERT TO "authenticated" WITH CHECK (((("author" = ( SELECT "profiles"."uid"() AS "uid")) AND ( SELECT "profiles"."is_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "is_role")) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."metadata" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."metadata" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."protected" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."protected" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."scripts" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "scripts"."scripts" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
@@ -2252,19 +2187,19 @@ CREATE POLICY "INSERT for SERVICE_USER" ON "scripts"."wasplib" FOR INSERT TO "se
 
 
 
-CREATE POLICY "SELECT for ALLOWED" ON "scripts"."metadata" FOR SELECT USING ("profiles"."can_view"("profiles"."uid"(), "id"));
+CREATE POLICY "SELECT for ALLOWED" ON "scripts"."metadata" FOR SELECT USING ("profiles"."can_view"(( SELECT "profiles"."uid"() AS "uid"), "id"));
 
 
 
-CREATE POLICY "SELECT for ALLOWED" ON "scripts"."protected" FOR SELECT USING ("profiles"."can_view"("profiles"."uid"(), "id"));
+CREATE POLICY "SELECT for ALLOWED" ON "scripts"."protected" FOR SELECT USING ("profiles"."can_view"(( SELECT "profiles"."uid"() AS "uid"), "id"));
 
 
 
-CREATE POLICY "SELECT for ALLOWED" ON "scripts"."scripts" FOR SELECT USING ("profiles"."can_view"("profiles"."uid"(), "id"));
+CREATE POLICY "SELECT for ALLOWED" ON "scripts"."scripts" FOR SELECT USING ("profiles"."can_view"(( SELECT "profiles"."uid"() AS "uid"), "id"));
 
 
 
-CREATE POLICY "SELECT for ALLOWED" ON "scripts"."versions" FOR SELECT USING ("profiles"."can_view"("profiles"."uid"(), "id"));
+CREATE POLICY "SELECT for ALLOWED" ON "scripts"."versions" FOR SELECT USING ("profiles"."can_view"(( SELECT "profiles"."uid"() AS "uid"), "id"));
 
 
 
@@ -2288,19 +2223,19 @@ CREATE POLICY "SELECT for SERVICE_USER" ON "scripts"."simba" FOR INSERT TO "serv
 
 
 
-CREATE POLICY "UPDATE for AUTHOR" ON "scripts"."bundles" FOR UPDATE TO "authenticated" USING ((("author" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles"))) WITH CHECK ((("author" = "profiles"."uid"()) OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "UPDATE for AUTHOR" ON "scripts"."bundles" FOR UPDATE TO "authenticated" USING ((("author" = ( SELECT "profiles"."uid"() AS "uid")) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role"))) WITH CHECK ((("author" = ( SELECT "profiles"."uid"() AS "uid")) OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
-CREATE POLICY "UPDATE for AUTHOR" ON "scripts"."metadata" FOR UPDATE TO "authenticated" USING (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id"))) WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "UPDATE for AUTHOR" ON "scripts"."metadata" FOR UPDATE TO "authenticated" USING ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id"))) WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
-CREATE POLICY "UPDATE for OWNER" ON "scripts"."scripts" FOR UPDATE TO "authenticated" USING (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id"))) WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "UPDATE for OWNER" ON "scripts"."scripts" FOR UPDATE TO "authenticated" USING ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id"))) WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
-CREATE POLICY "UPDATE for OWNER" ON "scripts"."versions" FOR UPDATE TO "authenticated" USING (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id"))) WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "UPDATE for OWNER" ON "scripts"."versions" FOR UPDATE TO "authenticated" USING ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id"))) WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
@@ -2332,23 +2267,23 @@ ALTER TABLE "scripts"."versions" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "scripts"."wasplib" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "stats"."limits" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "stats"."limits" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "stats"."limits_custom" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "stats"."limits_custom" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "stats"."values" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "stats"."values" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "stats"."values_custom" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "stats"."values_custom" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
-CREATE POLICY "INSERT for SCRIPTER" ON "stats"."website" FOR INSERT TO "authenticated" WITH CHECK ("profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles"));
+CREATE POLICY "INSERT for SCRIPTER" ON "stats"."website" FOR INSERT TO "authenticated" WITH CHECK (( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role"));
 
 
 
@@ -2380,23 +2315,23 @@ CREATE POLICY "SELECT for EVERYONE" ON "stats"."values_custom" FOR SELECT USING 
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "stats"."online" FOR SELECT TO "authenticated" USING (("scripts"."is_author"("profiles"."uid"(), "script_id") OR "profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles")));
+CREATE POLICY "SELECT for OWNER" ON "stats"."online" FOR SELECT TO "authenticated" USING (("scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "script_id") OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role")));
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "stats"."website" FOR SELECT USING (("scripts"."is_author"("profiles"."uid"(), "id") OR "profiles"."is_role"("profiles"."uid"(), 'administrator'::"profiles"."roles")));
+CREATE POLICY "SELECT for OWNER" ON "stats"."website" FOR SELECT USING (("scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id") OR ( SELECT "profiles"."is_role"(( SELECT "profiles"."uid"() AS "uid"), 'administrator'::"profiles"."roles") AS "is_role")));
 
 
 
-CREATE POLICY "SELECT for OWNER" ON "stats"."website_monthly" FOR SELECT TO "authenticated" USING (("profiles"."is_role"("profiles"."uid"(), 'administrator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "SELECT for OWNER" ON "stats"."website_monthly" FOR SELECT TO "authenticated" USING ((( SELECT "profiles"."is_role"(( SELECT "profiles"."uid"() AS "uid"), 'administrator'::"profiles"."roles") AS "is_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
-CREATE POLICY "UPDATE for OWNER" ON "stats"."limits" FOR UPDATE TO "authenticated" USING (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id"))) WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "UPDATE for OWNER" ON "stats"."limits" FOR UPDATE TO "authenticated" USING ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id"))) WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
-CREATE POLICY "UPDATE for OWNER" ON "stats"."limits_custom" FOR UPDATE TO "authenticated" USING (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id"))) WITH CHECK (("profiles"."min_role"("profiles"."uid"(), 'moderator'::"profiles"."roles") OR "scripts"."is_author"("profiles"."uid"(), "id")));
+CREATE POLICY "UPDATE for OWNER" ON "stats"."limits_custom" FOR UPDATE TO "authenticated" USING ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id"))) WITH CHECK ((( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'moderator'::"profiles"."roles") AS "min_role") OR "scripts"."is_author"(( SELECT "profiles"."uid"() AS "uid"), "id")));
 
 
 
@@ -2440,7 +2375,7 @@ ALTER TABLE "stats"."website" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "stats"."website_monthly" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "SELECT for EVERYONE" ON "stripe"."prices" FOR SELECT USING (("active" OR "profiles"."min_role"("profiles"."uid"(), 'scripter'::"profiles"."roles")));
+CREATE POLICY "SELECT for EVERYONE" ON "stripe"."prices" FOR SELECT USING (("active" OR ( SELECT "profiles"."min_role"(( SELECT "profiles"."uid"() AS "uid"), 'scripter'::"profiles"."roles") AS "min_role")));
 
 
 
@@ -2661,12 +2596,6 @@ GRANT ALL ON FUNCTION "scripts"."tr_scripts_post_insert"() TO "service_role";
 GRANT ALL ON FUNCTION "scripts"."tr_scripts_pre_insert"() TO "anon";
 GRANT ALL ON FUNCTION "scripts"."tr_scripts_pre_insert"() TO "authenticated";
 GRANT ALL ON FUNCTION "scripts"."tr_scripts_pre_insert"() TO "service_role";
-
-
-
-GRANT ALL ON FUNCTION "scripts"."tr_storage_objects_insert"() TO "anon";
-GRANT ALL ON FUNCTION "scripts"."tr_storage_objects_insert"() TO "authenticated";
-GRANT ALL ON FUNCTION "scripts"."tr_storage_objects_insert"() TO "service_role";
 
 
 
