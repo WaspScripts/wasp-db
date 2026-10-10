@@ -95,7 +95,7 @@ services:
       - './volumes/snippets:/app/snippets:Z'
       - './volumes/functions:/app/edge-functions:Z'
   supabase-db:
-    image: 'supabase/postgres:15.8.1.085'
+    image: 'supabase/postgres:17.6.1.136'
     healthcheck:
       test: 'pg_isready -U postgres -h 127.0.0.1'
       interval: 5s
