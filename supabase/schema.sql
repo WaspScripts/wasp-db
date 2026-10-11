@@ -764,6 +764,25 @@ CREATE OR REPLACE FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_sta
 ALTER FUNCTION "scripts"."min_stage"("script_id" "uuid", "target_stage" "scripts"."stage") OWNER TO "supabase_admin";
 
 
+CREATE OR REPLACE FUNCTION "scripts"."safe_filenames"("files" "text"[]) RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
+    SET "search_path" TO ''
+    AS $_$
+      SELECT COALESCE(
+        bool_and(
+          f IS NOT NULL
+          AND f ~ '^[A-Za-z0-9 _-][A-Za-z0-9 _.-]{0,99}$'
+          AND f NOT LIKE '%..%'
+        ),
+        true
+      )
+      FROM unnest(files) AS f;
+$_$;
+
+
+ALTER FUNCTION "scripts"."safe_filenames"("files" "text"[]) OWNER TO "supabase_admin";
+
+
 CREATE OR REPLACE FUNCTION "scripts"."tr_bundles_check_scripts"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -1287,7 +1306,8 @@ CREATE TABLE IF NOT EXISTS "scripts"."versions" (
     "revision" integer NOT NULL,
     "simba" character varying NOT NULL,
     "wasplib" "text" DEFAULT "scripts"."latest_wasplib"() NOT NULL,
-    "files" "text"[] DEFAULT '{''script.simba''}'::"text"[] NOT NULL,
+    "files" "text"[] DEFAULT '{script.simba}'::"text"[] NOT NULL,
+    CONSTRAINT "versions_files_safe" CHECK ("scripts"."safe_filenames"("files")),
     CONSTRAINT "versions_simba_check" CHECK ((("simba")::"text" ~ '^[0-9a-fA-F]{10}$'::"text"))
 );
 
